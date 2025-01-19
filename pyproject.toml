@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "ythistory"
+version = "0.1.0"
+description = ""
+authors = ["William Wang <twasawang@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+google-api-python-client = "^2.157.0"
+google-auth-httplib2 = "^0.2.0"
+google-auth-oauthlib = {extras = ["installedappflow"], version = "^1.2.1"}
+python-dotenv = "1.0.1"
+jmespath = "1.0.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
