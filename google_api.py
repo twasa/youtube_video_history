@@ -20,7 +20,6 @@ class Google(object):
         self.sheet_api = None
         self.driver_api = None
         self.api_key = None
-        self.channel_response = None
         self.video_response = None
         self.scopes = []
         self.flow = None
@@ -63,6 +62,33 @@ class Google(object):
             credentials=self.credential
         )
 
+    def google_drive_folder_creation(self, folder_name: str) -> str:
+        file_metadata = {
+            "name": folder_name,
+            "mimeType": "application/vnd.google-apps.folder"
+        }
+        try:
+            file = self.driver_api.files().create(body=file_metadata, fields="id").execute()
+            print(f"Folder ID: {file.get('id')}")
+            return file.get("id")
+        except HttpError as err:
+            print(f"Error: {err}")
+            return
+
+    def google_sheet_creation(self, sheet_name: str) -> str:
+        spreadsheet = {
+            "properties": {
+                "title": sheet_name
+            }
+        }
+        try:
+            spreadsheet = self.sheet_api.spreadsheets().create(body=spreadsheet, fields="spreadsheetId").execute()
+            print(f"Spreadsheet ID: {spreadsheet.get('spreadsheetId')}")
+            return spreadsheet.get("spreadsheetId")
+        except HttpError as err:
+            print(f"Error: {err}")
+            return
+
     def list_google_sheets(self) -> list:
         query = "mimeType = 'application/vnd.google-apps.spreadsheet'"
         response = self.driver_api.files().list(q=query, fields="nextPageToken, files(id, name)").execute()
@@ -85,8 +111,8 @@ class Google(object):
             data = {"file_items": file_items}
             return jmespath.search(f"file_items[?name == '{file_name}'].id", data)
 
-    def youtube_channel_response_validation(self) -> str:
-        result_counts = jmespath.search("pageInfo.totalResults", self.channel_response)
+    def youtube_channel_response_validation(self, channel_response) -> str:
+        result_counts = jmespath.search("pageInfo.totalResults", channel_response)
         return result_counts > 0
 
     def datetime_string_to_iso_format(self, datetime_string: str) -> Optional[str]:
@@ -94,7 +120,6 @@ class Google(object):
             return datetime.strptime(datetime_string, "%Y-%m-%dT%H:%M:%SZ").isoformat()
         except ValueError:
             return None
-
 
     def playlist_metadata_compose(self, playlist_id) -> list:
         video_list = []
@@ -104,10 +129,14 @@ class Google(object):
             request = self.youtube_api.playlistItems().list(
                 part="snippet",
                 playlistId=playlist_id,
-                maxResults=50,
+                maxResults=100,
                 pageToken=next_page_token
             )
-            self.video_response = request.execute()
+            try:
+                self.video_response = request.execute()
+            except HttpError as err:
+                print(f"Error: {err}")
+                return video_list
             # https://developers.google.com/youtube/v3/docs/videos?#resource
             for item in self.video_response["items"]:
                 channel_title = item["snippet"]["channelTitle"]  # Video view count
@@ -131,23 +160,57 @@ class Google(object):
                 break
         return video_list
 
+    def get_channel_id_by_username(self):
+        """
+        Fetch the YouTube channel ID using the username or custom URL.
+        Args:
+            username_or_custom_url (str): The username or custom URL of the YouTube channel.
+        Returns:
+            str: The channel ID if found, or None.
+        """
+        # Call the YouTube API to search for the channel
+        username_or_custom_url = input("Enter the username or custom URL of the YouTube channel: ")
+        request = self.youtube_api.search().list(
+            part="snippet",
+            q=username_or_custom_url,
+            type="channel",
+            maxResults=1  # Only fetch the first result
+        )
+        try:
+            response = request.execute()
+        except HttpError as err:
+            print(f"Error: {err}")
+
+        if response.get("items"):
+            channel_id = response["items"][0]["id"]["channelId"]
+            return channel_id
+        else:
+            print("Channel not found!")
+            return None
 
     def get_channel_videos(self):
         request = self.youtube_api.channels().list(
             part="contentDetails",
-            id=self.config.get("YOUTUBE_CHANNEL_ID")
+            id=self.config.get("YOUTUBE_CHANNEL_ID") or self.get_channel_id_by_username()
         )
-        self.channel_response = request.execute()
-        if self.youtube_channel_response_validation() is False:
+        try:
+            response = request.execute()
+        except HttpError as err:
+            print(f"Error: {err}")
             return []
-        playlist_id = self.channel_response["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+        if self.youtube_channel_response_validation(response) is False:
+            return []
+        playlist_id = response["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
         return self.playlist_metadata_compose(playlist_id)
 
     def get_sheet_id_by_name(self, spreadsheet_id, sheet_name):
         # Retrieve spreadsheet metadata
-        response = self.sheet_api.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-        sheets = response.get('sheets', [])
-        
+        try:
+            response = self.sheet_api.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+            sheets = response.get('sheets', [])
+        except HttpError as err:
+            print(f"Error: {err}")
+            return
         # Iterate through the sheets to find the matching name
         for sheet in sheets:
             if sheet['properties']['title'] == sheet_name:
@@ -192,9 +255,12 @@ class Google(object):
             }
         ]
         body = {"requests": requests}
-        self.sheet_api.spreadsheets().batchUpdate(
-            spreadsheetId=spreadsheet_id, body=body
-        ).execute()
+        try:
+            self.sheet_api.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id, body=body
+            ).execute()
+        except HttpError as err:
+            print(f"Error: {err}")
 
     def insert_data_into_sheet(self, spreadsheet_id, video_list):
         range_name = "{}!{}".format(
