@@ -1,2 +1,6 @@
 **/.env
-**/credential.json
+**/*.json
+**/build
+**/dist
+**/*.exe
+**/publish.ps1
