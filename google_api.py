@@ -1,3 +1,4 @@
+import os.path
 import jmespath
 from datetime import datetime
 from typing import Optional
@@ -24,22 +25,27 @@ class Google(object):
         self.scopes = []
         self.flow = None
         self.credential = None
-
+        self.config = None
 
     def setup(self):
-        self.config = dotenv_values('.env')
+        self.config = dotenv_values(".env")
+        if not self.config:
+            raise Exception("No configuration file found.")
         self.data_fields = self.config.get("DATA_FIELDS").split(",")
         self.api_key = self.config.get("GOOGLE_API_KEY", None)
         for scope in self.config.get("GOOGLE_SCOPES").split(","):
             self.scopes.append(f"https://www.googleapis.com/auth/{scope}")
-        self.flow = InstalledAppFlow.from_client_secrets_file(self.config.get("GOOGLE_CREDENTIAL_FILE"), self.scopes)
-        self.credential = self.flow.run_local_server(port=0)
-        self.youtube_api = self.get_youtube_service()
-        self.sheet_api = self.get_sheets_service()
-        self.driver_api = self.get_google_driver_service()
-
-    def config_reload(self):
-        self.config = dotenv_values('.env')
+        oauth2_credental = self.config.get("GOOGLE_CREDENTIAL_FILE")
+        if not os.path.isfile(oauth2_credental):
+            raise Exception("No credential file not found.")
+        try:
+            self.flow = InstalledAppFlow.from_client_secrets_file(oauth2_credental, self.scopes)
+            self.credential = self.flow.run_local_server(port=0)
+            self.youtube_api = self.get_youtube_service()
+            self.sheet_api = self.get_sheets_service()
+            self.driver_api = self.get_google_driver_service()
+        except Exception as e:
+            raise Exception(f"Google API setup error: {str(e)}")
 
     def get_youtube_service(self) -> Resource:
         return build(
@@ -71,9 +77,8 @@ class Google(object):
             file = self.driver_api.files().create(body=file_metadata, fields="id").execute()
             print(f"Folder ID: {file.get('id')}")
             return file.get("id")
-        except HttpError as err:
-            print(f"Error: {err}")
-            return
+        except HttpError as e:
+            raise Exception(f"Google drive folder creation error: {str(e)}")
 
     def google_sheet_creation(self, sheet_name: str) -> str:
         spreadsheet = {
@@ -83,15 +88,16 @@ class Google(object):
         }
         try:
             spreadsheet = self.sheet_api.spreadsheets().create(body=spreadsheet, fields="spreadsheetId").execute()
-            print(f"Spreadsheet ID: {spreadsheet.get('spreadsheetId')}")
             return spreadsheet.get("spreadsheetId")
-        except HttpError as err:
-            print(f"Error: {err}")
-            return
+        except HttpError as e:
+            raise Exception(f"Google spreadsheets file creation error: {str(e)}")
 
     def list_google_sheets(self) -> list:
         query = "mimeType = 'application/vnd.google-apps.spreadsheet'"
-        response = self.driver_api.files().list(q=query, fields="nextPageToken, files(id, name)").execute()
+        try:
+            response = self.driver_api.files().list(q=query, fields="nextPageToken, files(id, name)").execute()
+        except HttpError as e:
+            raise Exception(f"Google drive list spreadsheet file error: {str(e)}")
         file_data = response.get('files', [])
         file_items = []
         if not file_data:
@@ -107,9 +113,7 @@ class Google(object):
             file_names = jmespath.search('[].name', file_items)
             for file_name in file_names:
                 print(file_name)
-            file_name = input("file name: ")
-            data = {"file_items": file_items}
-            return jmespath.search(f"file_items[?name == '{file_name}'].id", data)
+            return file_items
 
     def youtube_channel_response_validation(self, channel_response) -> str:
         result_counts = jmespath.search("pageInfo.totalResults", channel_response)
@@ -134,9 +138,8 @@ class Google(object):
             )
             try:
                 self.video_response = request.execute()
-            except HttpError as err:
-                print(f"Error: {err}")
-                return video_list
+            except HttpError as e:
+                raise Exception(f"Youtube video compose error: {str(e)}")
             # https://developers.google.com/youtube/v3/docs/videos?#resource
             for item in self.video_response["items"]:
                 channel_title = item["snippet"]["channelTitle"]  # Video view count
@@ -195,9 +198,8 @@ class Google(object):
         )
         try:
             response = request.execute()
-        except HttpError as err:
-            print(f"Error: {err}")
-            return []
+        except HttpError as e:
+            raise Exception(f"Youtube channel content get error: {str(e)}")
         if self.youtube_channel_response_validation(response) is False:
             return []
         playlist_id = response["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
@@ -208,9 +210,8 @@ class Google(object):
         try:
             response = self.sheet_api.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
             sheets = response.get('sheets', [])
-        except HttpError as err:
-            print(f"Error: {err}")
-            return
+        except HttpError as e:
+            raise Exception(f"Google get sheet id by name error: {str(e)}")
         # Iterate through the sheets to find the matching name
         for sheet in sheets:
             if sheet['properties']['title'] == sheet_name:
@@ -259,8 +260,17 @@ class Google(object):
             self.sheet_api.spreadsheets().batchUpdate(
                 spreadsheetId=spreadsheet_id, body=body
             ).execute()
-        except HttpError as err:
-            print(f"Error: {err}")
+        except HttpError as e:
+            raise Exception(f"Google spreadsheets row update error: {str(e)}")
+
+    def spreadsheet_create(self, spreadsheet_name: str):
+        spreadsheet_body = {"properties": {"title": spreadsheet_name}}
+        try:
+            response = self.sheet_api.spreadsheets().create(body=spreadsheet_body, fields="spreadsheetId").execute()
+            print(f"Spreadsheet ID: {(response.get('spreadsheetId'))}")
+            return response.get("spreadsheetId")
+        except HttpError as e:
+            raise Exception(f"Google spreadsheets create error: {str(e)}")
 
     def insert_data_into_sheet(self, spreadsheet_id, video_list):
         range_name = "{}!{}".format(
@@ -277,14 +287,19 @@ class Google(object):
                 valueInputOption=value_input_option,
                 body=request_body
             ).execute()
-        except HttpError as err:
-            print(f"Error: {err}")
+        except HttpError as e:
+            raise Exception(f"Write Google Spreadsheets Error: {str(e)}")
 
     def video_history_creation(self):
         if video_list := self.get_channel_videos():
             video_length = len(video_list)
-            spreadsheet_ids = self.list_google_sheets()
-            self.insert_data_into_sheet(spreadsheet_ids[0], video_list)
-            self.update_row_height(spreadsheet_ids[0], self.config.get("GOOGLE_SHEET_TAB_NAME"), start_row=1, end_row=video_length)
+            spreadsheet_items = self.list_google_sheets()
+            spreadsheet_file_name = input("Enter the name of the spreadsheet: ")
+            if spreadsheet_file_name not in jmespath.search("[*].name", spreadsheet_items):
+                spreadsheet_id = self.spreadsheet_create(spreadsheet_file_name)
+            else:
+                spreadsheet_id = jmespath.search(f"[?name=='{spreadsheet_file_name}'].id | [0]", spreadsheet_items)
+            self.insert_data_into_sheet(spreadsheet_id, video_list)
+            self.update_row_height(spreadsheet_id, self.config.get("GOOGLE_SHEET_TAB_NAME"), start_row=1, end_row=video_length)
         else:
             print("No videos found in channel id: {}".format(self.config.get("YOUTUBE_CHANNEL_ID")))
