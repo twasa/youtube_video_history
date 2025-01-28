@@ -1,6 +1,5 @@
-**/.env
 **/*.json
 **/build
 **/dist
 **/*.exe
-**/publish.ps1
+**/*.spec

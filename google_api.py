@@ -37,7 +37,7 @@ class Google(object):
             self.scopes.append(f"https://www.googleapis.com/auth/{scope}")
         oauth2_credental = self.config.get("GOOGLE_CREDENTIAL_FILE")
         if not os.path.isfile(oauth2_credental):
-            raise Exception("No credential file not found.")
+            raise Exception("No credential file found.")
         try:
             self.flow = InstalledAppFlow.from_client_secrets_file(oauth2_credental, self.scopes)
             self.credential = self.flow.run_local_server(port=0)
@@ -205,7 +205,7 @@ class Google(object):
         playlist_id = response["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
         return self.playlist_metadata_compose(playlist_id)
 
-    def get_sheet_id_by_name(self, spreadsheet_id, sheet_name):
+    def get_spreadsheet_id_by_name(self, spreadsheet_id, sheet_name):
         # Retrieve spreadsheet metadata
         try:
             response = self.sheet_api.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
@@ -222,7 +222,7 @@ class Google(object):
         return None
 
     def update_row_height(self, spreadsheet_id, sheet_name, start_row=1, end_row=10, column=4, width=480, height=480):
-        sheet_id = self.get_sheet_id_by_name(spreadsheet_id, sheet_name)
+        sheet_id = self.get_spreadsheet_id_by_name(spreadsheet_id, sheet_name)
         if sheet_id is None:
             return
         requests = [
